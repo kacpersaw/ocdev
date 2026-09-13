@@ -60,6 +60,10 @@ ocdev create myproject-clone --from myproject
 # List all environments
 ocdev list
 
+# Machine-readable list (only public instance metadata)
+ocdev list --json
+# [{"name":"myproject","instance":"ocdev-myproject","status":"Running","uuid":"00000000-0000-4000-8000-000000000001","ssh_port":2200}]
+
 # Access via shell (direct)
 ocdev shell myproject
 
@@ -88,7 +92,7 @@ ocdev ports
 | Command | Description |
 |---------|-------------|
 | `ocdev create <name> [--post-create <script>] [--from <container[/snapshot]>]` | Create new dev environment |
-| `ocdev list` | List all dev environments |
+| `ocdev list [--json]` | List all dev environments (table by default) |
 | `ocdev start <name>` | Start a stopped environment |
 | `ocdev stop <name>` | Stop a running environment |
 | `ocdev shell <name>` | Get interactive shell inside |
@@ -101,6 +105,14 @@ ocdev ports
 | `ocdev bindings` | List all dynamic port bindings across containers |
 | `ocdev export <name> [--output <path>]` | Export container as portable tarball |
 | `ocdev import <name> --file <path>` | Import container from exported tarball |
+
+`ocdev list --json` prints a JSON array with exactly `name` (short name),
+`instance` (full Incus name), `status` (the Incus status string), `uuid`
+(from `volatile.uuid`, or `null` when missing), and `ssh_port` (the integer
+from the local port allocation file, or `null` when unavailable). Raw Incus
+configuration is never included. No matching instances returns `[]` with exit
+code 0; query or malformed metadata failures return nonzero, report errors on
+stderr, and leave stdout empty. JSON listing does not initialize local state.
 
 ## How It Works
 
