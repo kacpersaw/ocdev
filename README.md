@@ -281,17 +281,6 @@ If the post-create script fails, the container is kept so you can debug:
 ocdev shell myproject  # Debug what went wrong
 ```
 
-## Testing the JSON list command
-
-With the Nim toolchain and project dependencies available, run:
-
-```bash
-make test-list-json
-```
-
-This builds the repository binary and runs isolated fake-Incus tests, without
-contacting an Incus daemon or using your real home directory.
-
 ## Troubleshooting
 
 ### "incus not found"
