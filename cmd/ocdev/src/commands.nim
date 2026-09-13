@@ -402,7 +402,7 @@ proc addDiskMounts(containerName: string): int =
   
   result = 0
 
-proc checkPrerequisites(): int =
+proc checkPrerequisites(initialize = true): int =
   ## Check incus command and group membership
   let (_, exitCode) = execCmdEx("command -v incus")
   if exitCode != 0:
@@ -414,10 +414,11 @@ proc checkPrerequisites(): int =
     error("User not in incus-admin group.")
     return ord(ecPrereq)
   
-  # Ensure ocdev directory
-  createDir(OcdevDir)
-  if not fileExists(PortsFile):
-    writeFile(PortsFile, "")
+  # Read-only commands do not initialize local state.
+  if initialize:
+    createDir(OcdevDir)
+    if not fileExists(PortsFile):
+      writeFile(PortsFile, "")
   
   result = ord(ecSuccess)
 
@@ -638,8 +639,63 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = ""): 
   success(fmt"Container '{name}' created (SSH: {port}, Services: {serviceBase}-{serviceEnd})")
   result = ord(ecSuccess)
 
-proc cmdList*(): int =
+proc listJson(): int =
+  ## Project Incus metadata onto a small, stable public schema.
+  let prereq = checkPrerequisites(initialize = false)
+  if prereq != 0:
+    return prereq
+
+  # Discard Incus diagnostics so warnings cannot corrupt JSON or expose config.
+  # Query failures receive a generic diagnostic below.
+  let (output, exitCode) = execCmdEx(
+    "incus list --format=json " & ContainerPrefix & " 2>/dev/null")
+  if exitCode != 0:
+    error("Failed to list containers")
+    return ord(ecError)
+
+  try:
+    let instances = parseJson(output)
+    if instances.kind != JArray:
+      raise newException(ValueError, "Expected an array")
+    var rows = newJArray()
+    for item in instances:
+      if item.kind != JObject or not item.hasKey("name") or
+          item["name"].kind != JString:
+        raise newException(ValueError, "Invalid instance name")
+      let instance = item["name"].getStr()
+      if not instance.startsWith(ContainerPrefix):
+        continue
+      let name = instance[ContainerPrefix.len .. ^1]
+      if name.len == 0 or not item.hasKey("status") or
+          item["status"].kind != JString or item["status"].getStr().len == 0:
+        raise newException(ValueError, "Invalid instance metadata")
+      var uuid = newJNull()
+      if item.hasKey("config") and item["config"].kind != JNull:
+        let cfg = item["config"]
+        if cfg.kind != JObject:
+          raise newException(ValueError, "Invalid instance config")
+        if cfg.hasKey("volatile.uuid") and cfg["volatile.uuid"].kind != JNull:
+          if cfg["volatile.uuid"].kind != JString:
+            raise newException(ValueError, "Invalid instance UUID")
+          if cfg["volatile.uuid"].getStr().len > 0:
+            uuid = cfg["volatile.uuid"]
+      let port = getPort(name)
+      var row = %*{"name": name, "instance": instance,
+        "status": item["status"].getStr()}
+      row["uuid"] = uuid
+      row["ssh_port"] = if port > 0: %port else: newJNull()
+      rows.add(row)
+    echo $rows
+    return ord(ecSuccess)
+  except CatchableError:
+    # Do not include parser diagnostics, which may quote private config values.
+    error("Failed to read container metadata or port allocations")
+    return ord(ecError)
+
+proc cmdList*(json = false): int =
   ## List all ocdev containers with status and SSH port
+  if json:
+    return listJson()
   let prereq = checkPrerequisites()
   if prereq != 0:
     return prereq
