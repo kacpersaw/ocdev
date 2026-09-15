@@ -1,0 +1,38 @@
+schemaVersion: 1
+id: node-redis
+name: Node application with Redis
+source:
+  snapshot: node-base/ready
+tasks:
+  install:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: npm
+    args: [ci]
+    timeoutMs: 600000
+  redis-start:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: docker
+    args: [compose, -p, ocdev-node-example, -f, .ocdev/compose.yaml, up, -d]
+    timeoutMs: 300000
+  test:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: npm
+    args: [test]
+    timeoutMs: 300000
+  redis-stop:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: docker
+    args: [compose, -p, ocdev-node-example, -f, .ocdev/compose.yaml, down]
+    timeoutMs: 120000
+hooks:
+  afterCreate: [install, redis-start]
+  beforeDelete: [redis-stop]
+processCompose:
+  cwd: /home/dev/workspace/app
+  file: .ocdev/process-compose.yaml
+  autostart: true
+  services: [web]

@@ -14,6 +14,9 @@ This is especially useful when you need to run **complex projects requiring mult
 - **Docker-in-Docker** - Full Docker support via Incus nesting
 - **Low overhead** - ~100-200MB RAM per container vs 512MB+ for VMs
 - **Custom setup scripts** - Run post-create scripts to install additional tools
+- **Snapshot recipes and projects** - Reusable setup tasks, hooks, private file references, and pinned configuration
+- **Task and service operations** - Execution history, bounded logs, and optional process-compose control
+- **Automation** - `--json` on noninteractive management commands; existing `list --json` stays compatible
 
 ## Prerequisites
 
@@ -36,6 +39,13 @@ This is especially useful when you need to run **complex projects requiring mult
    ```
 
 ## Installation
+
+Build from source with Nim 2.2.x and Nimble installed (release binaries need neither):
+
+```bash
+make dev-setup
+make
+```
 
 From the repository root:
 
@@ -86,6 +96,22 @@ ocdev delete myproject
 # View all port allocations
 ocdev ports
 ```
+
+## Recipes and projects
+
+Recipes clone an **existing** `container/snapshot`, then deliver project files and run declared tasks/hooks. There is no new image builder, snapshot manager, or server.
+
+```bash
+ocdev recipe validate ./recipe.yaml --json
+ocdev create demo --project ./project.yaml --dry-run --json
+ocdev create demo --project ./project.yaml --json
+ocdev task run demo test --json
+ocdev services list demo --json
+ocdev runs list demo --json
+ocdev delete demo --dry-run --json
+```
+
+See **[Recipes and projects](docs/recipes.md)** for the schema, complete CLI, generic examples, JSON contracts, failure recovery, and security boundaries. Recipes are trusted executable configuration; a snapshot may inherit host mounts or contain credentials. No application-specific, cloud, or agent integration is required.
 
 ## Commands
 
@@ -275,7 +301,7 @@ source ~/.nvm/nvm.sh
 nvm install 20
 ```
 
-If the post-create script fails, the container is kept so you can debug:
+If the post-create script fails, creation now exits nonzero and the container and its port allocation are kept so you can debug:
 
 ```bash
 ocdev shell myproject  # Debug what went wrong

@@ -1,5 +1,5 @@
 ## Port allocation management with POSIX file locking
-import std/[os, strutils, posix]
+import std/[os, strutils, posix, net, tempfiles]
 import config
 
 # POSIX flock constants
@@ -107,6 +107,62 @@ proc savePortAllocation*(name: string, port: int) =
   defer: f.close()
   f.writeLine(name & ":" & $port)
 
+proc writeAllocations(content: string) =
+  ## Caller holds the global lock; rename avoids readers observing partial state.
+  let (file, path) = createTempFile("ports-", ".tmp", OcdevDir)
+  try:
+    file.write(content)
+    file.close()
+    setFilePermissions(path, {fpUserRead, fpUserWrite})
+    moveFile(path, PortsFile)
+  finally:
+    if fileExists(path): removeFile(path)
+
+proc portListening(port: int): bool =
+  # An IPv6-only listener may not prevent binding an IPv4 test socket.
+  for path in ["/proc/net/tcp", "/proc/net/tcp6"]:
+    if fileExists(path):
+      for line in lines(path):
+        let columns = line.splitWhitespace()
+        if columns.len > 3 and columns[3] == "0A":
+          try:
+            if parseHexInt(columns[1].split(':')[^1]) == port: return true
+          except ValueError: discard
+  let socket = newSocket()
+  defer: socket.close()
+  try:
+    socket.bindAddr(Port(port), "0.0.0.0")
+    return false
+  except OSError:
+    return true
+
+proc reservePort*(name: string, blocked: seq[int] = @[]): int =
+  ## Selection and persistence are one transaction across CLI processes.
+  withLock(exclusive = true) do -> int:
+    var content = if fileExists(PortsFile): readFile(PortsFile) else: ""
+    for line in content.splitLines():
+      if line.startsWith(name & ":"):
+        raise newException(ValueError, "Name already has a port allocation; inspect it before retrying")
+    let allocated = readAllocatedPorts()
+    var candidate = SshPortStart
+    while candidate <= 65535 and getServicePortBase(candidate) + ServicePortsCount - 1 <= 65535:
+      var available = isPortBlockAvailable(candidate, allocated)
+      if available:
+        var requested = @[candidate]
+        for offset in 0 ..< ServicePortsCount:
+          requested.add(getServicePortBase(candidate) + offset)
+        for port in requested:
+          if port in blocked or portListening(port):
+            available = false
+            break
+      if available:
+        if content.len > 0 and not content.endsWith("\n"): content.add("\n")
+        content.add(name & ":" & $candidate & "\n")
+        writeAllocations(content)
+        return candidate
+      candidate += PortsPerVm
+    raise newException(ValueError, "No available SSH/service port block")
+
 proc removePort*(name: string) =
   ## Remove port allocation for container (with exclusive lock)
   withLockVoid(exclusive = true) do ():
@@ -117,9 +173,9 @@ proc removePort*(name: string) =
       if not line.startsWith(name & ":"):
         newLines.add(line)
     if newLines.len > 0:
-      writeFile(PortsFile, newLines.join("\n") & "\n")
+      writeAllocations(newLines.join("\n") & "\n")
     else:
-      writeFile(PortsFile, "")
+      writeAllocations("")
 
 proc getPort*(name: string): int =
   ## Get allocated SSH port for container (0 if not found)

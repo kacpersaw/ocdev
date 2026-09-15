@@ -1,6 +1,7 @@
 ## ocdev - Manage isolated development environments using Incus containers
 import cligen
-import config, commands
+import std/os
+import config, commands, recipe_cli
 
 # Set version for --version flag
 clCfg.version = Version
@@ -16,9 +17,14 @@ clCfg.useMulti = """${doc}Usage:
 
 Subcommands:
 $subcmds
+Recipe commands: recipe, project, inspect, setup, task, runs, services, doctor
+Create also accepts --recipe FILE-OR-ID or --project FILE (existing snapshots).
+Noninteractive commands accept --json. Run "ocdev recipe --help" for the full workflow.
 Run "$command SUBCMD --help" for details on a specific command.${ifVersion}"""
 
 when isMainModule:
+  let extended = dispatchExtended(commandLineParams())
+  if extended.handled: quit(extended.code)
   const noVer = "CLIGEN-NOHELP" # Hide --version from subcommand help tables
 
   dispatchMulti(

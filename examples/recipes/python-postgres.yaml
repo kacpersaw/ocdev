@@ -1,0 +1,38 @@
+schemaVersion: 1
+id: python-postgres
+name: Python application with PostgreSQL
+source:
+  snapshot: python-base/ready
+tasks:
+  install:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: sh
+    args: [-c, 'set -eu; python3 -m venv .venv; .venv/bin/pip install -r requirements.txt']
+    timeoutMs: 600000
+  postgres-start:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: docker
+    args: [compose, -p, ocdev-python-example, -f, .ocdev/compose.yaml, up, -d]
+    timeoutMs: 300000
+  test:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: .venv/bin/python
+    args: [-m, pytest]
+    timeoutMs: 300000
+  postgres-stop:
+    kind: command
+    cwd: /home/dev/workspace/app
+    command: docker
+    args: [compose, -p, ocdev-python-example, -f, .ocdev/compose.yaml, down]
+    timeoutMs: 120000
+hooks:
+  afterCreate: [install, postgres-start]
+  beforeDelete: [postgres-stop]
+processCompose:
+  cwd: /home/dev/workspace/app
+  file: .ocdev/process-compose.yaml
+  autostart: true
+  services: [web]

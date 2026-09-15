@@ -1,0 +1,20 @@
+schemaVersion: 1
+id: python-postgres-example
+name: Local Python and PostgreSQL example
+recipePath: ../../recipes/python-postgres.yaml
+seedFiles:
+  - id: application-env
+    source: .env.example
+    destination: /home/dev/workspace/app/.env
+    mode: "0600"
+    required: true
+  - id: docker-compose
+    source: compose.yaml
+    destination: /home/dev/workspace/app/.ocdev/compose.yaml
+    mode: "0644"
+    required: true
+  - id: process-compose
+    source: process-compose.yaml
+    destination: /home/dev/workspace/app/.ocdev/process-compose.yaml
+    mode: "0644"
+    required: true

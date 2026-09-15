@@ -6,3 +6,5 @@ srcDir        = "src"
 bin           = @["ocdev"]
 requires "nim >= 2.0.0"
 requires "cligen >= 1.7.0"
+requires "yaml >= 2.2.1"
+requires "checksums >= 0.2.2"
