@@ -1,5 +1,5 @@
 ## Unit tests for ocdev
-import std/strutils
+import std/[net, os, strutils, tempfiles]
 import unittest
 import ../src/container
 import ../src/ports
@@ -68,6 +68,15 @@ suite "Port calculation":
     check isPortBlockAvailable(2390, allocated) == false
     check isPortBlockAvailable(2400, allocated) == true
 
+  test "host listeners are unavailable for allocation":
+    var listener = newSocket(Domain.AF_INET, SockType.SOCK_STREAM, Protocol.IPPROTO_TCP)
+    defer: listener.close()
+    listener.setSockOpt(OptReuseAddr, false)
+    listener.bindAddr(Port(0), "127.0.0.1")
+    listener.listen()
+    let (_, boundPort) = listener.getLocalAddr()
+    check isHostPortAvailable(int(boundPort)) == false
+
 suite "Constants":
   test "exit codes have correct values":
     check ord(ecSuccess) == 0
@@ -81,6 +90,29 @@ suite "Constants":
     check ServicePortStart == 2300
     check PortsPerVm == 10
     check ServicePortsCount == 10
+
+suite "Global create configuration":
+  test "loads optional user defaults and rejects malformed config":
+    let root = createTempDir("ocdev-config-", "")
+    defer: removeDir(root)
+    let path = root / "config.json"
+    check loadCreateConfig(path) == (BaseImage, "")
+    check not fileExists(path)
+    writeFile(path, "{}")
+    check loadCreateConfig(path) == (BaseImage, "")
+    writeFile(path, """{"base_image":"images:ubuntu/26.04", "default_base_source":"custom-base/stable"}""")
+    check loadCreateConfig(path) == ("images:ubuntu/26.04", "custom-base/stable")
+    writeFile(path, """{"default_base_source":""}""")
+    check loadCreateConfig(path) == (BaseImage, "")
+    for invalid in ["not json", "[]", "null", "{\"base_image\":42}",
+        "{\"default_base_source\":null}", "{\"base_image\":\"\"}", "{\"base_image\":\"--help\"}"]:
+      writeFile(path, invalid)
+      expect CatchableError:
+        discard loadCreateConfig(path)
+    removeFile(path)
+    createDir(path)
+    expect IOError:
+      discard loadCreateConfig(path)
 
 suite "Port argument parsing":
   test "single port sets both container and host port":
@@ -131,6 +163,41 @@ suite "Port argument parsing":
     check result.containerPort == 1
     check result.hostPort == 65535
 
+
+suite "Create source resolution":
+  test "plain create without config uses the remote image":
+    let result = resolveCreateCloneArg("", "", false)
+    check result.valid == true
+    check result.cloneArg == ""
+
+  test "plain create uses the configured clone source":
+    let result = resolveCreateCloneArg("", "", false, "custom-base/stable")
+    check result.valid == true
+    check result.cloneArg == "custom-base/stable"
+
+  test "explicit snapshot takes precedence over the default":
+    let result = resolveCreateCloneArg("custom-base/snap1", "", false, "default-base/stable")
+    check result.valid == true
+    check result.cloneArg == "custom-base/snap1"
+
+  test "explicit clone source takes precedence over the default":
+    let result = resolveCreateCloneArg("", "custom-base/snap2", false, "default-base/stable")
+    check result.valid == true
+    check result.cloneArg == "custom-base/snap2"
+
+  test "fresh create selects the remote image path":
+    let result = resolveCreateCloneArg("", "", true, "default-base/stable")
+    check result.valid == true
+    check result.cloneArg == ""
+
+  test "rejects conflicting source options":
+    let duplicate = resolveCreateCloneArg("base/snap", "other/snap", false)
+    check duplicate.valid == false
+    check duplicate.errMsg == "Use either --from-snapshot/--fromSnapshot or --from, not both"
+
+    let freshClone = resolveCreateCloneArg("base/snap", "", true)
+    check freshClone.valid == false
+    check freshClone.errMsg == "Use --fresh without --from-snapshot/--fromSnapshot or --from"
 
 suite "Clone source parsing":
   test "parses live container source":

@@ -1,4 +1,4 @@
-.PHONY: all clean test test-list-json
+.PHONY: all clean test test-list-json test-create-config
 
 NIMFLAGS = -d:release --opt:size
 
@@ -17,6 +17,9 @@ test: bin/ocdev
 # Read-only CLI coverage using fake Incus (no daemon required).
 test-list-json: bin/ocdev
 	python3 cmd/ocdev/tests/test_list_json.py ./bin/ocdev
+
+test-create-config: bin/ocdev
+	python3 cmd/ocdev/tests/test_create_config.py ./bin/ocdev
 
 clean:
 	rm -f bin/ocdev bin/ocdev-debug

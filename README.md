@@ -91,7 +91,7 @@ ocdev ports
 
 | Command | Description |
 |---------|-------------|
-| `ocdev create <name> [--post-create <script>] [--from <container[/snapshot]>]` | Create new dev environment |
+| `ocdev create <name> [--post-create <script>] [--from <container[/snapshot]>] [--fresh]` | Create new dev environment |
 | `ocdev list [--json]` | List all dev environments (table by default) |
 | `ocdev start <name>` | Start a stopped environment |
 | `ocdev stop <name>` | Stop a running environment |
@@ -114,6 +114,30 @@ configuration is never included. No matching instances returns `[]` with exit
 code 0; query or malformed metadata failures return nonzero, report errors on
 stderr, and leave stdout empty. JSON listing does not initialize local state.
 
+## Global User Configuration
+
+Optional defaults live in `~/.ocdev/config.json`, outside the repository, and
+apply to every project run by the current user:
+
+```json
+{
+  "base_image": "images:ubuntu/26.04",
+  "default_base_source": "my-base/stable"
+}
+```
+
+Both fields are optional strings. Without a config, `ocdev create` provisions
+from `images:ubuntu/25.10`, as before. A nonempty `default_base_source` makes plain
+`create` clone that container or snapshot instead (omit the `ocdev-` prefix).
+Explicit `--from` or `--from-snapshot` overrides the configured source;
+`--fresh` ignores it and provisions from `base_image`. `--fresh` cannot be
+combined with either source flag. An empty `default_base_source` disables the
+clone default. Invalid or unreadable config fails creation rather than silently
+falling back; other commands do not read this file.
+
+Use your own existing container/snapshot name in this file. Do not commit
+machine-specific defaults into the source code.
+
 ## How It Works
 
 1. **Incus Profile**: Creates an `ocdev` profile with Docker nesting enabled
@@ -129,6 +153,7 @@ stderr, and leave stdout empty. JSON listing does not initialize local state.
 ```
 ~/.local/bin/ocdev       # Executable (or symlink)
 ~/.ocdev/                # Config directory
+~/.ocdev/config.json     # Optional user-wide create defaults
 ~/.ocdev/ports           # Port assignments (name:port format)
 ~/.ocdev/.lock           # Lock file for concurrent operations
 ```

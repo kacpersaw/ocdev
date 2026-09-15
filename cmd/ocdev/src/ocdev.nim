@@ -24,13 +24,14 @@ when isMainModule:
   dispatchMulti(
     [cmdCreate, cmdName = "create",
      doc = "Create a new development container",
-    short = {"name": 'n', "postCreate": '\0', "fromSnapshot": '\0', "from": '\0', "version": '\0'},
+    short = {"name": 'n', "postCreate": '\0', "fromSnapshot": '\0', "from": '\0', "fresh": '\0', "version": '\0'},
     help = {
       "version": noVer,
       "name": "Container name (alphanumeric and hyphens, max 50 chars)",
       "postCreate": "Script to run after container creation",
       "fromSnapshot": "Create from snapshot (format: container/snapshot)",
-      "from": "Clone from container or snapshot (format: container or container/snapshot; use snapshot for a stable point-in-time copy)"
+      "from": "Clone from container or snapshot (format: container or container/snapshot; use snapshot for a stable point-in-time copy)",
+      "fresh": "Provision from the configured remote image instead of the default clone source"
      }],
     [cmdList, cmdName = "list",
      doc = "List all ocdev containers",

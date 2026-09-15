@@ -1,5 +1,5 @@
 ## Port allocation management with POSIX file locking
-import std/[os, strutils, posix]
+import std/[net, os, strutils, posix]
 import config
 
 # POSIX flock constants
@@ -87,13 +87,41 @@ proc isPortBlockAvailable*(sshPort: int, allocatedSshPorts: seq[int]): bool =
       return false
   result = true
 
+proc isHostPortAvailable*(port: int): bool =
+  ## Check whether a TCP port can be bound on all IPv4 interfaces. This catches
+  ## listeners not managed by ocdev, which are absent from the allocation file.
+  if port < 1 or port > 65535:
+    return false
+
+  var socket: Socket
+  try:
+    socket = newSocket(Domain.AF_INET, SockType.SOCK_STREAM, Protocol.IPPROTO_TCP)
+    socket.setSockOpt(OptReuseAddr, false)
+    socket.bindAddr(Port(port), "0.0.0.0")
+    result = true
+  except OSError:
+    result = false
+  finally:
+    if socket != nil:
+      socket.close()
+
+proc isHostPortBlockAvailable*(sshPort: int): bool =
+  ## Check the SSH port and all derived service ports against live host sockets.
+  if not isHostPortAvailable(sshPort):
+    return false
+  let serviceStart = getServicePortBase(sshPort)
+  for port in serviceStart ..< serviceStart + ServicePortsCount:
+    if not isHostPortAvailable(port):
+      return false
+  result = true
+
 proc allocatePort*(): int =
   ## Find next available SSH port (called within lock context).
   ## Ports increment by PORTS_PER_VM (10) starting at SSH_PORT_START (2200),
   ## while avoiding both existing SSH ports and existing service port ranges.
   let allocated = readAllocatedPorts()
   var port = SshPortStart
-  while not isPortBlockAvailable(port, allocated):
+  while not isPortBlockAvailable(port, allocated) or not isHostPortBlockAvailable(port):
     port += PortsPerVm
     if port > 65535 or getServicePortBase(port) + ServicePortsCount - 1 > 65535:
       raise newException(ValueError, "No available ports (all from " & 
