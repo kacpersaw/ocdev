@@ -72,6 +72,20 @@ proc parseCloneSource*(`from`: string): tuple[source: CloneSource, valid: bool, 
 
   return (CloneSource(kind: cskSnapshot, container: container, snapshot: snapshot), true, "")
 
+proc resolveCreateCloneArg*(fromSnapshot, `from`: string, fresh: bool, defaultBaseSource = ""): tuple[cloneArg: string, valid: bool, errMsg: string] =
+  ## Resolve create-source precedence without performing provider work.
+  if fromSnapshot.len > 0 and `from`.len > 0:
+    return ("", false, "Use either --from-snapshot/--fromSnapshot or --from, not both")
+  if fresh and (fromSnapshot.len > 0 or `from`.len > 0):
+    return ("", false, "Use --fresh without --from-snapshot/--fromSnapshot or --from")
+  if fromSnapshot.len > 0:
+    return (fromSnapshot, true, "")
+  if `from`.len > 0:
+    return (`from`, true, "")
+  if fresh:
+    return ("", true, "")
+  return (defaultBaseSource, true, "")
+
 
 const
   DynDevicePrefix = "dyn-"
@@ -263,8 +277,9 @@ proc run(c: var ContainerCleanup) =
   ## Execute cleanup if needed (delete the container)
   if c.needed:
     warn("Cleaning up failed container...")
-    if execCmd("incus delete --force " & quoteShell(c.containerName) & " 2>/dev/null") == 0:
-      removePort(c.containerName[ContainerPrefix.len .. ^1])
+    discard execCmd("incus delete --force " & quoteShell(c.containerName) & " 2>/dev/null")
+    # The creator's deferred cleanup is the sole owner of reservation release.
+    # Releasing here as well can erase a new creator's allocation on the second pass.
 
 proc cancel(c: var ContainerCleanup) =
   ## Mark cleanup as no longer needed (success path)
@@ -453,7 +468,7 @@ proc checkPrerequisites(initialize = true): int =
   
   result = ord(ecSuccess)
 
-proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = ""): int =
+proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", fresh = false): int =
   ## Create a new development container
   ## 
   ## Creates an Incus container with:
@@ -463,6 +478,13 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = ""): 
   ## - Docker-in-container support
   ## - Dev user with matching UID and passwordless sudo
   
+  let createConfig = try:
+    loadCreateConfig()
+  except CatchableError:
+    error("Invalid or unreadable " & (getOcdevDir() / "config.json") &
+      "; expected a JSON object with string base_image/default_base_source settings")
+    return ord(ecError)
+
   # Check prerequisites
   let prereq = checkPrerequisites()
   if prereq != 0:
@@ -485,10 +507,9 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = ""): 
       return ord(ecError)
   
   let containerName = ContainerPrefix & name
-  let cloneArg = if fromSnapshot.len > 0: fromSnapshot else: `from`
-
-  if fromSnapshot.len > 0 and `from`.len > 0:
-    error("Use either --from-snapshot/--fromSnapshot or --from, not both")
+  let (cloneArg, createSourceValid, createSourceErr) = resolveCreateCloneArg(fromSnapshot, `from`, fresh, createConfig.defaultBaseSource)
+  if not createSourceValid:
+    error(createSourceErr)
     return ord(ecError)
   
   if cloneArg.len > 0:
@@ -592,10 +613,10 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = ""): 
   
   var cleanup = initCleanup(containerName)
   
-  info(fmt"Creating container '{name}' with SSH port {port}...")
+  info(fmt"Creating fresh container '{name}' from {createConfig.baseImage} with SSH port {port}...")
   
   # Launch container
-  var exitCode = execCmd("incus launch " & BaseImage & " " & containerName & 
+  var exitCode = execCmd("incus launch " & quoteShell(createConfig.baseImage) & " " & containerName &
                          " --profile default --profile " & ProfileName)
   if exitCode != 0:
     error("Failed to launch container")
@@ -1017,7 +1038,7 @@ proc cmdUnbind*(name: string, port: int): int =
   success(fmt"Unbound port {port}")
   result = ord(ecSuccess)
 
-proc cmdRebind*(name: string, port: string): int =
+proc rebindPort(name, port, pinnedOwner: string; discoverOwner: bool): int =
   ## Rebind a port to a different container, unbinding from the current owner first
   ##
   ## If the port is already bound to another container, it will be unbound first.
@@ -1055,7 +1076,9 @@ proc cmdRebind*(name: string, port: string): int =
     return ord(ecSuccess)
 
   # Find which container currently has this port bound
-  let currentOwner = findPortBinding(hostPort)
+  # Guarded callers supply the owner they locked and revalidated. Do not
+  # rediscover another owner here and mutate it without holding its lock.
+  let currentOwner = if discoverOwner: findPortBinding(hostPort) else: pinnedOwner
 
   if currentOwner.len > 0:
     # Unbind from current owner
@@ -1088,6 +1111,17 @@ proc cmdRebind*(name: string, port: string): int =
       success(fmt"Bound host:{hostPort} -> container:{containerPort} to '{name}'")
 
   result = ord(ecSuccess)
+
+proc cmdRebind*(name: string, port: string): int =
+  ## Move a host-port binding to another container.
+  rebindPort(name, port, "", discoverOwner = true)
+
+proc cmdRebindFrom*(name, port, owner: string): int =
+  ## Internal adapter: caller holds endpoint locks and has revalidated owner.
+  if owner.len > 0 and
+      (not owner.startsWith(ContainerPrefix) or not validateName(owner[ContainerPrefix.len .. ^1]).valid):
+    return ord(ecError)
+  rebindPort(name, port, owner, discoverOwner = false)
 
 proc cmdExport*(name: string, output = ""): int =
   ## Export a container as a portable tarball

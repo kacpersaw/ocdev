@@ -1,4 +1,4 @@
-.PHONY: all clean test test-list-json test-recipes test-live dev-setup FORCE
+.PHONY: all clean test test-list-json test-create-config test-recipes test-live dev-setup FORCE
 
 NIMFLAGS = -d:release --opt:size
 NIM_TEST_FLAGS ?= --hints:off
@@ -6,7 +6,7 @@ TEST_SRC = cmd/ocdev/tests
 RECIPE_TEST_BINS = bin/test_recipes bin/test_cli_recipes bin/test_recipe_engine \
 	bin/fake_incus_cli bin/fake_incus_engine bin/recipe_engine_harness
 TEST_BINS = $(RECIPE_TEST_BINS) bin/test_all bin/test_list_json bin/fake_incus_list \
-	bin/test_process_support bin/process_probe
+	bin/test_process_support bin/process_probe bin/test_create_config bin/fake_incus_create_config
 # The recipe CLI includes a maintained YAML parser; keep its release budget explicit.
 MAX_BINARY_BYTES ?= 2097152
 
@@ -45,6 +45,7 @@ test: bin/ocdev $(TEST_BINS)
 	bin/test_process_support "$(abspath bin/process_probe)"
 	bin/test_recipes
 	bin/test_list_json "$(abspath bin/ocdev)" "$(abspath bin/fake_incus_list)"
+	bin/test_create_config "$(abspath bin/ocdev)" "$(abspath bin/fake_incus_create_config)"
 	bin/test_cli_recipes "$(abspath bin/ocdev)" "$(abspath bin/fake_incus_cli)"
 	bin/test_recipe_engine "$(abspath bin/recipe_engine_harness)" "$(abspath bin/fake_incus_engine)"
 
@@ -60,6 +61,9 @@ test-live: bin/ocdev
 # Read-only CLI coverage using fake Incus (no daemon required).
 test-list-json: bin/ocdev bin/test_list_json bin/fake_incus_list
 	bin/test_list_json "$(abspath bin/ocdev)" "$(abspath bin/fake_incus_list)"
+
+test-create-config: bin/ocdev bin/test_create_config bin/fake_incus_create_config
+	bin/test_create_config "$(abspath bin/ocdev)" "$(abspath bin/fake_incus_create_config)"
 
 clean:
 	rm -f bin/ocdev bin/ocdev-debug bin/test-all bin/test-recipes $(TEST_BINS)

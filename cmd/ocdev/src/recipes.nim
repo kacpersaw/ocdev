@@ -2,7 +2,7 @@
 import std/[os, json, strutils, sets, algorithm, math, tempfiles, posix]
 import checksums/sha2
 import yaml/[parser, data, stream, tojson]
-import container
+import container, safe_input
 
 const MaxDefinitionBytes = 1024 * 1024
 const PrivateDir = {fpUserRead, fpUserWrite, fpUserExec}
@@ -102,13 +102,7 @@ proc document(path: string): JsonNode =
     let full = hostPath(path, getCurrentDir())
     let ext = splitFile(full).ext.toLowerAscii
     if ext notin [".json", ".yaml", ".yml"]: invalid()
-    if getFileInfo(full).kind != pcFile: invalid()
-    let f = open(full, fmRead)
-    defer: f.close()
-    var raw = newString(MaxDefinitionBytes + 1)
-    let count = f.readBuffer(addr raw[0], raw.len)
-    if count > MaxDefinitionBytes: invalid()
-    raw.setLen(count)
+    let raw = readBoundedRegularFile(full, MaxDefinitionBytes)
     checkEvents(raw)
     if ext == ".json": result = parseJson(raw)
     else:
@@ -257,18 +251,24 @@ proc registryLock[T](body: proc(): T): T =
   result = body()
 
 proc atomicWrite(path, content: string) =
-  let (f, temporary) = createTempFile(".recipe-", ".tmp", parentDir(path))
   try:
-    setFilePermissions(temporary, PrivateFile)
-    f.write(content)
-    f.flushFile()
-    if fsync(getFileHandle(f)) != 0: invalid("Cannot persist recipe registry")
-    f.close()
-    moveFile(temporary, path)
-  finally:
-    if fileExists(temporary):
+    let (f, temporary) = createTempFile(".recipe-", ".tmp", parentDir(path))
+    var closed = false
+    try:
+      setFilePermissions(temporary, PrivateFile)
+      f.write(content)
+      f.flushFile()
+      if fsync(getFileHandle(f)) != 0: invalid("Cannot persist recipe registry")
+      closed = true
       f.close()
-      removeFile(temporary)
+      moveFile(temporary, path)
+    finally:
+      try:
+        if not closed: f.close()
+      finally:
+        if fileExists(temporary): removeFile(temporary)
+  except CatchableError:
+    invalid("Cannot persist recipe registry")
 
 proc registered(id: string): JsonNode =
   if not safeId(id): invalid("Invalid recipe reference")

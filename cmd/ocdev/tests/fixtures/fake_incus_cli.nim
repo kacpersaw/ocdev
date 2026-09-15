@@ -10,6 +10,17 @@ proc main() =
   let root = getEnv("FAKE_ROOT")
   doAssert root.len > 0
   let a = commandLineParams()
+  proc barrier(marker, release: string) =
+    writeFile(root / marker, "ready")
+    for attempt in 0 ..< 2000:
+      if fileExists(root / release): return
+      sleep(5)
+    quit("Fixture barrier deadline exceeded", 98)
+  # Pause before taking the backend lock so other CLI processes can query state.
+  if a[0] == "copy" and getEnv("WAIT_COPY") == "1":
+    barrier("copy-waiting", "copy-release")
+  if a[0] == "list" and getEnv("WAIT_ABSENCE") == "1" and fileExists(root / "cleanup-deleted"):
+    barrier("cleanup-waiting", "cleanup-release")
   let fd = posix.open((root / "backend.lock").cstring, O_WRONLY or O_CREAT, Mode(0o600))
   doAssert fd >= 0
   defer: discard posix.close(fd)
@@ -24,9 +35,20 @@ proc main() =
     if getEnv("BAD_METADATA").len > 0:
       echo "private-sentinel"
       quit(1)
-    var rows = newJArray()
-    for _, item in state: rows.add(item)
-    echo rows
+    if getEnv("SWITCH_REBIND_OWNER") == "1" and a == @["list", "--format=json"]:
+      let counter = root / "owner-queries"
+      let count = (if fileExists(counter): parseInt(readFile(counter)) else: 0) + 1
+      writeFile(counter, $count)
+      if count == 2:
+        state["ocdev-base"]["expanded_devices"]["dyn-8080"] = state["ocdev-demo"]["expanded_devices"]["dyn-8080"]
+        state["ocdev-demo"]["expanded_devices"].delete("dyn-8080")
+        save()
+    if "csv" in a:
+      for name, _ in state: echo name
+    else:
+      var rows = newJArray()
+      for _, item in state: rows.add(item)
+      echo rows
   of "info":
     if not state.hasKey(a[1]): quit(1)
     if getEnv("FAIL_FINAL_INFO").len > 0 and a[1] != "ocdev-base" and
@@ -55,11 +77,13 @@ proc main() =
     echo "private-sentinel"
     stderr.writeLine("private-sentinel")
   of "start", "stop":
+    if a[0] == "start" and getEnv("FAIL_START") == "1": quit(7)
     state[a[1]]["status"] = %(if a[0] == "start": "Running" else: "Stopped")
     save()
   of "delete":
-    state.delete(a[1])
+    state.delete(a[^1]) # Supports both delete NAME and delete --force NAME.
     save()
+    if getEnv("WAIT_ABSENCE") == "1": writeFile(root / "cleanup-deleted", "ready")
   of "config":
     if a[1] == "unset": return
     doAssert a[1] == "device"

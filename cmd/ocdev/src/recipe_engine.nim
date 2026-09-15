@@ -1,7 +1,7 @@
 ## Local recipe lifecycle. Recipes are trusted executable configuration, not a sandbox.
 import std/[json, os, strutils, posix, times, sysrand, algorithm, sequtils, math]
 import std/unicode except strip, toLower, toUpper
-import config, recipes, recipe_exec, container, ports
+import config, recipes, recipe_exec, container, ports, safe_input
 
 type EngineError* = object of CatchableError
   code*: string
@@ -57,7 +57,7 @@ proc locked(name: string; body: proc(): JsonNode {.closure.}): JsonNode =
   privateDir(root())
   privateDir(root() / "environments")
   let path = root() / "environments" / (name & ".lock")
-  let fd = posix.open(path.cstring, O_CREAT or O_RDWR, Mode(0o600))
+  let fd = posix.open(path.cstring, O_CREAT or O_RDWR or O_CLOEXEC, Mode(0o600))
   if fd < 0: raise newException(IOError, "Cannot open environment lock")
   defer: discard posix.close(fd)
   if flock(fd, 2 or 4) != 0: raise newException(IOError, "Environment operation already running")
@@ -124,9 +124,20 @@ proc operation(name, kind: string; body: proc(op: JsonNode): JsonNode {.closure.
     error.exitCode = if cause of EngineError: max(1, cast[ref EngineError](cause).exitCode) else: 1
     raise error
 
-proc trackOperation*(name, kind: string; body: proc(): JsonNode {.closure.}): JsonNode =
-  locked(name, proc(): JsonNode =
-    operation(name, kind, proc(op: JsonNode): JsonNode = body()))
+proc trackOperation*(name, kind: string; body: proc(): JsonNode {.closure.};
+    relatedNames: seq[string] = @[]): JsonNode =
+  # Rebind mutates both endpoints. Acquire every lock in a stable order, then
+  # validate pinned identities while those locks are held, including stopped
+  # containers (start/stop and proxy-device changes do not require a running guest).
+  let names = (@[name] & relatedNames).deduplicate().sorted()
+  proc acquire(index: int): JsonNode =
+    if index < names.len:
+      return locked(names[index], proc(): JsonNode = acquire(index + 1))
+    operation(name, kind, proc(op: JsonNode): JsonNode =
+      for target in names:
+        if hasRecipeEnvironment(target): discard guard(readState(target), running = false)
+      body())
+  acquire(0)
 
 proc step(op: JsonNode; kind, name: string; body: proc() {.closure.}) =
   let s = %*{"kind": kind, "name": name, "status": "running"}
@@ -143,9 +154,7 @@ proc seedsPreflight(project: JsonNode) =
       if seed{"required"}.getBool: raise newException(IOError, "Required project file unavailable")
       continue
     if getFileSize(source) > 16 * 1024 * 1024: raise newException(IOError, "Project file exceeds size limit")
-    var f: File
-    if not open(f, source, fmRead): raise newException(IOError, "Project file unreadable")
-    f.close()
+    discard readBoundedRegularFile(source, 16 * 1024 * 1024)
     let dest = seed["destination"].getStr
     let mode = seed["mode"].getStr
     if not dest.isAbsolute or dest == "/" or dest.contains('\x00') or mode.len notin 3..4:
@@ -304,7 +313,7 @@ proc setup(state, op: JsonNode) =
         if not fileExists(seed["source"].getStr): continue
         step(op, "seed", seed["id"].getStr, proc() =
           let destination = seed["destination"].getStr
-          let content = readFile(seed["source"].getStr)
+          let content = readBoundedRegularFile(seed["source"].getStr, 16 * 1024 * 1024)
           checked(remote(state, "/", @["mkdir", "-p", "--", parentDir(destination)]))
           # Private same-directory staging prevents partial files and symlink following.
           # The script is fixed; destinations/mode are argv and content only stdin.
@@ -385,7 +394,8 @@ proc createEnvironment*(name, recipeRef, projectPath: string; dryRun: bool;
           try:
             if observe(name).kind == JNull:
               removeFile(statePath(name))
-              removePort(name)
+              # The clone callback owns its port reservation. We must not
+              # release a reservation acquired by a competing plain creator.
           except CatchableError: discard
           raise)
       setup(state, op)

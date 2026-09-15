@@ -1,7 +1,7 @@
 ## CLI-only orchestration. Human output and JSON share the same operations.
 import std/[os, json, strutils, tables, sequtils]
 import cligen/parseopt3
-import config, commands, ports, automation, recipes, recipe_engine
+import config, commands, ports, automation, recipes, recipe_engine, safe_input
 
 type
   Options = object
@@ -31,7 +31,13 @@ proc parseOptions(args: seq[string]): Options =
       of "fromSnapshot": key = "from-snapshot"
       else: discard
       if result.values.hasKey(key): invalid("arguments.duplicate_option")
-      if key in ["json", "dry-run", "rerun", "list", "help"]:
+      if key == "fresh":
+        var enabled = true
+        if parts.len == 2:
+          try: enabled = parseBool(parts[1])
+          except ValueError: invalid("arguments.invalid_flag")
+        result.values[key] = $enabled
+      elif key in ["json", "dry-run", "rerun", "list", "help"]:
         if parts.len > 1: invalid("arguments.invalid_flag")
         result.values[key] = "true"
       else:
@@ -98,11 +104,12 @@ proc legacyAction(command: string, o: Options): JsonNode =
     requireSuccess(code)
     return %*{"name": name, "action": command, "status": "completed"}
   of "create":
-    o.allow(["name", "post-create", "from", "from-snapshot"])
+    o.allow(["name", "post-create", "from", "from-snapshot", "fresh"])
     let name = o.nameArg()
     if hasRecipeEnvironment(name): invalid("environment.recipe_state_exists")
     let code = captureLegacy(proc(): int = cmdCreate(name,
-      postCreate = o.value("post-create"), fromSnapshot = o.value("from-snapshot"), `from` = o.value("from")))
+      postCreate = o.value("post-create"), fromSnapshot = o.value("from-snapshot"),
+      `from` = o.value("from"), fresh = o.value("fresh", "false") == "true"))
     requireSuccess(code)
     return %*{"name": name, "instance": ContainerPrefix & name, "action": command,
       "status": "completed", "ssh_port": getPort(name)}
@@ -119,7 +126,7 @@ proc legacyAction(command: string, o: Options): JsonNode =
     if command == "export":
       result["output_path"] = %o.value("output", getCurrentDir() / (name & ".tar.gz"))
     else: result["ssh_port"] = %getPort(name)
-  of "bind", "unbind", "rebind":
+  of "bind", "unbind":
     o.allow(["name", "port", "list"])
     var position = o.positional
     let name = if o.has("name"): o.value("name")
@@ -134,17 +141,45 @@ proc legacyAction(command: string, o: Options): JsonNode =
     let parsed = parsePortArg(port)
     if not parsed.valid or (command == "unbind" and ':' in port): invalid("port.invalid")
     let code = captureLegacy(proc(): int =
-      case command
-      of "bind": cmdBind(name, port)
-      of "unbind": cmdUnbind(name, parsed.hostPort)
-      else: cmdRebind(name, port))
+      if command == "bind": cmdBind(name, port)
+      else: cmdUnbind(name, parsed.hostPort))
     requireSuccess(code)
     return %*{"name": name, "action": command, "status": "completed",
       "host_port": parsed.hostPort, "container_port": parsed.containerPort}
   of "shell": invalid("shell.interactive_only")
   else: invalid("command.unknown")
 
+proc rebindResult(o: Options): JsonNode =
+  o.allow(["name", "port"])
+  var position = o.positional
+  let name = if o.has("name"): o.value("name")
+             elif position.len > 0: position[0] else: ""
+  requireName(name)
+  if not o.has("name"): position.delete(0)
+  if (o.has("port") and position.len != 0) or (not o.has("port") and position.len != 1): invalid()
+  let port = if o.has("port"): o.value("port") else: position[0]
+  let parsed = parsePortArg(port)
+  if not parsed.valid: invalid("port.invalid")
+  proc owner(): string =
+    for row in bindingRows():
+      if row["host_port"].getInt == parsed.hostPort:
+        if result.len > 0: invalid("ports.ambiguous_owner")
+        result = row["name"].getStr
+  let before = owner()
+  let related = if before.len == 0: @[] else: @[before]
+  trackOperation(name, "rebind", proc(): JsonNode =
+    # Fail rather than switching to a newly discovered, unlocked owner.
+    if owner() != before: invalid("ports.owner_changed")
+    let fullOwner = if before.len == 0: "" else: ContainerPrefix & before
+    let code = if o.has("json"):
+                 captureLegacy(proc(): int = cmdRebindFrom(name, port, fullOwner))
+               else: cmdRebindFrom(name, port, fullOwner)
+    requireSuccess(code)
+    %*{"name": name, "action": "rebind", "status": "completed",
+       "host_port": parsed.hostPort, "container_port": parsed.containerPort}, related)
+
 proc legacyResult(command: string, o: Options): JsonNode =
+  if command == "rebind": return rebindResult(o)
   if command in ["create", "start", "stop", "delete", "bind", "unbind", "rebind", "import", "export"] and
       not o.has("dry-run") and not o.has("list"):
     let name = if o.has("name"): o.value("name")
@@ -205,7 +240,7 @@ proc perform(command: string, o: Options): JsonNode =
       if o.has("input-file"):
         let path = o.value("input-file")
         if getFileSize(path) > 1024 * 1024: invalid("task.inputs_too_large")
-        try: inputs = parseJson(readFile(path))
+        try: inputs = parseJson(readBoundedRegularFile(path, 1024 * 1024))
         except CatchableError: invalid("task.invalid_inputs")
         if inputs.kind != JObject: invalid("task.invalid_inputs")
       return taskRun(name, o.positional[2], inputs)
@@ -305,7 +340,7 @@ proc dispatchExtended*(args: seq[string]): tuple[handled: bool, code: int] =
     return (true, 0)
   try:
     let options = parseOptions(args[1 .. ^1])
-    if command in mutations and not jsonMode:
+    if command in mutations and command != "rebind" and not jsonMode:
       let name = if options.has("name"): options.value("name")
                  elif options.positional.len > 0: options.positional[0] else: ""
       requireName(name)
@@ -318,7 +353,7 @@ proc dispatchExtended*(args: seq[string]): tuple[handled: bool, code: int] =
       if not options.has("dry-run"): return (false, 0)
     let data = perform(command, options)
     if jsonMode: echo $data
-    else: renderHuman(data)
+    elif command != "rebind": renderHuman(data) # Rebind preserves legacy human output.
     return (true, 0)
   except CatchableError as e:
     var code = "operation.failed"

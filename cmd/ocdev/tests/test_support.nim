@@ -37,7 +37,8 @@ proc newSandbox*(prefix: string; fakeBinary = ""): Sandbox =
   # Do not let a developer's fake-backend switches influence another test.
   for key in ["BAD_LIST", "BAD_SERVICES", "BAD_METADATA", "DRIVER",
               "MISSING_SNAPSHOT", "EXEC_SEEDS", "FAIL_COPY", "FAIL_HOOK",
-              "FAIL_FINAL_INFO", "FAKE_STATE", "FAKE_TRACE", "FAKE_ROOT"]:
+              "FAIL_FINAL_INFO", "FAIL_START", "WAIT_COPY", "WAIT_ABSENCE",
+              "SWITCH_REBIND_OWNER", "FAKE_STATE", "FAKE_TRACE", "FAKE_ROOT"]:
     result.env.del(key)
   result.env["HOME"] = result.home
   result.env["PATH"] = result.home & ":" & getEnv("PATH")
