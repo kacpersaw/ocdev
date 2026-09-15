@@ -4,7 +4,6 @@ cmd/ocdev/nim.cfg
 *.o
 *.a
 nimcache/
-cmd/ocdev/tests/.engine-build-*/
 
 # Build outputs
 bin/

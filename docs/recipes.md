@@ -111,7 +111,7 @@ Failed setup retains the environment and records failed steps for inspection. UU
 
 Source builds use Nim and Atlas. `make dev-setup` initializes Atlas and installs `cligen`, NimYAML, and `checksums` from the `.nimble` manifest into project-local `cmd/ocdev/deps/`. Atlas generates `nim.cfg` search paths and disables global Nimble package lookup; no global package installation is required. The resulting Linux binary has no Nim, Python, Node, or YAML-library runtime dependency. The maintained YAML parser increases binary size: the stripped implementation binary is approximately 1.2 MiB, with an explicit 2 MiB release budget in `make size-check`.
 
-`make test` builds and runs unit/fake-Incus tests without contacting a live daemon. It covers schema/registry behavior, JSON contracts, concurrent clones, failed hooks, seed replacement, UUID protection, recovery, and service projections.
+`make test` builds and runs Nim `unittest` suites and compiled Nim fake-Incus executables on Linux, with no Python dependency and no live daemon access. Each integration test has an isolated home/backend state; subprocesses have separate stdout/stderr capture, deadlines, and cleanup. The engine harness is a normal Nim source file built with the same Atlas configuration, not generated at test runtime. Coverage includes schema/registry behavior, JSON contracts, concurrent clones, failed hooks, real-shell atomic seed replacement, UUID protection, recovery, and service projections. `make test-list-json` and `make test-recipes` run focused subsets; all test binaries live under ignored `bin/`.
 
 A live smoke test is separately opt-in and executes trusted recipe code:
 

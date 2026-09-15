@@ -56,6 +56,17 @@ mkdir -p ~/.local/bin
 ln -sf "$(pwd)/bin/ocdev" ~/.local/bin/ocdev
 ```
 
+## Testing
+
+After `make dev-setup`, run `make test` on Linux. The unit and integration tests
+are written in Nim and use compiled fake Incus executables; they require neither
+Python nor a live Incus daemon. Test binaries are built into `bin/` using the
+same project-local Atlas dependencies as ocdev.
+
+Use `make test-list-json` for listing contracts or `make test-recipes` for recipe
+coverage. Live container tests remain a separate, explicitly authorized workflow;
+see [verification](docs/recipes.md#verification).
+
 ## Usage
 
 ```bash
