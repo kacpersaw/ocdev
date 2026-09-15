@@ -40,7 +40,9 @@ This is especially useful when you need to run **complex projects requiring mult
 
 ## Installation
 
-Build from source with Nim 2.2.x and Nimble installed (release binaries need neither):
+Build from source with Nim and Atlas installed (release binaries need neither).
+Atlas installs the dependencies declared in `cmd/ocdev/ocdev.nimble` into the
+project-local `cmd/ocdev/deps/` directory:
 
 ```bash
 make dev-setup

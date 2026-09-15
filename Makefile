@@ -40,7 +40,7 @@ clean:
 
 # Development helpers
 dev-setup:
-	cd cmd/ocdev && nimble install --depsOnly -y
+	cd cmd/ocdev && atlas init && atlas install
 
 size-check: bin/ocdev
 	@echo "Binary size: $$(du -h bin/ocdev | cut -f1)"

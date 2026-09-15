@@ -89,7 +89,10 @@ else: sys.exit(9)
 class RecipeEngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.build = tempfile.TemporaryDirectory(prefix='ocdev-engine-build-')
+        # Keep the generated source under the project so Nim reads Atlas's
+        # parent nim.cfg, including its local paths and --noNimblePath.
+        cls.build = tempfile.TemporaryDirectory(prefix='.engine-build-', dir=SRC.parent / 'tests')
+        cls.addClassCleanup(cls.build.cleanup)
         build = Path(cls.build.name)
         (build / 'harness.nim').write_text(HARNESS)
         cls.binary = build / 'engine-test'
@@ -99,10 +102,6 @@ class RecipeEngineTests(unittest.TestCase):
         subprocess.run([nim, 'c', '--hints:off', f'--path:{SRC}',
                         f'--nimcache:{build / "cache"}', f'-o:{cls.binary}',
                         str(build / 'harness.nim')], check=True, capture_output=True, text=True)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.build.cleanup()
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='ocdev-engine-test-')

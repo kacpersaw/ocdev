@@ -109,7 +109,7 @@ Failed setup retains the environment and records failed steps for inspection. UU
 
 ## Verification
 
-Source builds require Nim/Nimble plus `cligen`, NimYAML, and `checksums` (installed by `make dev-setup`). The resulting Linux binary has no Nim, Python, Node, or YAML-library runtime dependency. The maintained YAML parser increases binary size: the stripped implementation binary is approximately 1.2 MiB, with an explicit 2 MiB release budget in `make size-check`.
+Source builds use Nim and Atlas. `make dev-setup` initializes Atlas and installs `cligen`, NimYAML, and `checksums` from the `.nimble` manifest into project-local `cmd/ocdev/deps/`. Atlas generates `nim.cfg` search paths and disables global Nimble package lookup; no global package installation is required. The resulting Linux binary has no Nim, Python, Node, or YAML-library runtime dependency. The maintained YAML parser increases binary size: the stripped implementation binary is approximately 1.2 MiB, with an explicit 2 MiB release budget in `make size-check`.
 
 `make test` builds and runs unit/fake-Incus tests without contacting a live daemon. It covers schema/registry behavior, JSON contracts, concurrent clones, failed hooks, seed replacement, UUID protection, recovery, and service projections.
 
