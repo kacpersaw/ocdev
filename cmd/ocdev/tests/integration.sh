@@ -3,6 +3,11 @@
 
 set -e
 
+if [[ "${OCDEV_LIVE_TESTS:-}" != 1 ]]; then
+  echo 'Set OCDEV_LIVE_TESTS=1 to authorize this legacy live-container test' >&2
+  exit 1
+fi
+
 NIM_BIN="./bin/ocdev"
 BASH_BIN="./bin/ocdev-bash"
 TEST_NAME="test-$(date +%s)"

@@ -6,7 +6,17 @@ cmd/ocdev/nim.cfg
 nimcache/
 
 # Build outputs
-bin/ocdev
+bin/
+__pycache__/
+
+# Local agent/runtime state and private environment files
+/.pi/
+/.ocdev/
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
 
 # Editor
 *.swp

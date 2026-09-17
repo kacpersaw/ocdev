@@ -6,14 +6,14 @@ proc containerExists*(name: string): bool =
   ## Check if container exists by running 'incus info <name>'
   ## Returns true if exit code is 0
   let fullName = ContainerPrefix & name
-  let (_, exitCode) = execCmdEx("incus info " & fullName & " 2>/dev/null")
+  let (_, exitCode) = execCmdEx("incus info " & quoteShell(fullName) & " 2>/dev/null")
   result = exitCode == 0
 
 proc containerRunning*(name: string): bool =
   ## Check if container is running by parsing 'incus info' output
   ## Looks for 'Status: RUNNING' line
   let fullName = ContainerPrefix & name
-  let (output, exitCode) = execCmdEx("incus info " & fullName & " 2>/dev/null")
+  let (output, exitCode) = execCmdEx("incus info " & quoteShell(fullName) & " 2>/dev/null")
   if exitCode != 0:
     return false
   # Parse output for "Status: RUNNING"
@@ -26,7 +26,7 @@ proc snapshotExists*(containerName, snapshotName: string): bool =
   ## Check if snapshot exists on container
   ## Uses: incus snapshot list <container> --format=csv
   let fullName = ContainerPrefix & containerName
-  let (output, exitCode) = execCmdEx(fmt"incus snapshot list {fullName} --format=csv 2>/dev/null")
+  let (output, exitCode) = execCmdEx(fmt"incus snapshot list {quoteShell(fullName)} --format=csv 2>/dev/null")
   if exitCode != 0:
     return false
   for line in output.strip().splitLines():

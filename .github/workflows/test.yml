@@ -1,0 +1,30 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install dependencies
+        run: make dev-setup
+      - name: Build and run isolated tests
+        run: make test
+      - name: Validate public examples
+        run: |
+          for recipe in examples/recipes/*.yaml; do
+            bin/ocdev recipe validate "$recipe" --json
+          done
+          for project in examples/projects/*/project.yaml; do
+            bin/ocdev project validate "$project" --json
+          done

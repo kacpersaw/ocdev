@@ -14,6 +14,9 @@ This is especially useful when you need to run **complex projects requiring mult
 - **Docker-in-Docker** - Full Docker support via Incus nesting
 - **Low overhead** - ~100-200MB RAM per container vs 512MB+ for VMs
 - **Custom setup scripts** - Run post-create scripts to install additional tools
+- **Snapshot recipes and projects** - Reusable setup tasks, hooks, private file references, and pinned configuration
+- **Task and service operations** - Execution history, bounded logs, and optional process-compose control
+- **Automation** - `--json` on noninteractive management commands; existing `list --json` stays compatible
 
 ## Prerequisites
 
@@ -37,12 +40,33 @@ This is especially useful when you need to run **complex projects requiring mult
 
 ## Installation
 
+Build from source with Nim and Atlas installed (release binaries need neither).
+Atlas installs the dependencies declared in `cmd/ocdev/ocdev.nimble` into the
+project-local `cmd/ocdev/deps/` directory:
+
+```bash
+make dev-setup
+make
+```
+
 From the repository root:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/bin/ocdev" ~/.local/bin/ocdev
 ```
+
+## Testing
+
+After `make dev-setup`, run `make test` on Linux. The unit and integration tests
+are written in Nim and use compiled fake Incus executables; they require neither
+Python nor a live Incus daemon. Test binaries are built into `bin/` using the
+same project-local Atlas dependencies as ocdev.
+
+Use `make test-list-json` for listing contracts, `make test-create-config` for
+create defaults and `--fresh`, or `make test-recipes` for recipe
+coverage. Live container tests remain a separate, explicitly authorized workflow;
+see [verification](docs/recipes.md#verification).
 
 ## Usage
 
@@ -86,6 +110,22 @@ ocdev delete myproject
 # View all port allocations
 ocdev ports
 ```
+
+## Recipes and projects
+
+Recipes clone an **existing** `container/snapshot`, then deliver project files and run declared tasks/hooks. There is no new image builder, snapshot manager, or server.
+
+```bash
+ocdev recipe validate ./recipe.yaml --json
+ocdev create demo --project ./project.yaml --dry-run --json
+ocdev create demo --project ./project.yaml --json
+ocdev task run demo test --json
+ocdev services list demo --json
+ocdev runs list demo --json
+ocdev delete demo --dry-run --json
+```
+
+See **[Recipes and projects](docs/recipes.md)** for the schema, complete CLI, generic examples, JSON contracts, failure recovery, and security boundaries. Recipes are trusted executable configuration; a snapshot may inherit host mounts or contain credentials. No application-specific, cloud, or agent integration is required.
 
 ## Commands
 
@@ -300,7 +340,7 @@ source ~/.nvm/nvm.sh
 nvm install 20
 ```
 
-If the post-create script fails, the container is kept so you can debug:
+If the post-create script fails, creation now exits nonzero and the container and its port allocation are kept so you can debug:
 
 ```bash
 ocdev shell myproject  # Debug what went wrong

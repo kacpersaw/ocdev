@@ -1,0 +1,8 @@
+version: "0.5"
+processes:
+  web:
+    command: node --env-file=.env server.js
+    working_dir: /home/dev/workspace/app
+    availability:
+      restart: on_failure
+      backoff_seconds: 5

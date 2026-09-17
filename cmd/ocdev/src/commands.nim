@@ -1,5 +1,5 @@
 ## Command implementations for ocdev
-import std/[os, osproc, strutils, strformat, posix, json]
+import std/[os, osproc, strutils, strformat, posix, json, tempfiles]
 import config, output, container, ports, profile, provision, postinstall
 
 const
@@ -277,7 +277,9 @@ proc run(c: var ContainerCleanup) =
   ## Execute cleanup if needed (delete the container)
   if c.needed:
     warn("Cleaning up failed container...")
-    discard execCmd("incus delete --force " & c.containerName & " 2>/dev/null")
+    discard execCmd("incus delete --force " & quoteShell(c.containerName) & " 2>/dev/null")
+    # The creator's deferred cleanup is the sole owner of reservation release.
+    # Releasing here as well can erase a new creator's allocation on the second pass.
 
 proc cancel(c: var ContainerCleanup) =
   ## Mark cleanup as no longer needed (success path)
@@ -285,24 +287,54 @@ proc cancel(c: var ContainerCleanup) =
 
 # --- Port allocation helper ---
 
-proc allocatePortSafe(): tuple[port: int, err: string] =
-  ## Allocate port with lock and error handling
-  ## Returns (port, "") on success or (0, errorMsg) on failure
+proc confirmedAbsent(name: string): bool =
+  ## Backend failures are unknown, not proof that a reservation is unused.
+  let (raw, code) = execCmdEx("incus list --format=json 2>/dev/null")
+  if code != 0: return false
   try:
-    let port = withLock(exclusive = true) do -> int:
-      allocatePort()
-    return (port, "")
-  except IOError as e:
-    return (0, "Failed to allocate port: " & e.msg)
-  except ValueError as e:
-    return (0, e.msg)
+    let items = parseJson(raw)
+    if items.kind != JArray: return false
+    for item in items:
+      if item.kind != JObject or not item.hasKey("name") or item["name"].kind != JString: return false
+      if item["name"].getStr() == ContainerPrefix & name: return false
+    return true
+  except CatchableError: return false
+
+proc allocatePortSafe(name: string): tuple[port: int, err: string] =
+  ## Include stopped instances' proxy reservations as well as live listeners.
+  try:
+    let (raw, code) = execCmdEx("incus list --format=json 2>/dev/null")
+    if code != 0: return (0, "Unable to inspect existing port bindings")
+    let instances = parseJson(raw)
+    if instances.kind != JArray: return (0, "Invalid instance metadata")
+    var blocked: seq[int] = @[]
+    for item in instances:
+      if item.kind != JObject: return (0, "Invalid instance metadata")
+      let devices = if item.hasKey("expanded_devices"): item["expanded_devices"]
+                    elif item.hasKey("devices"): item["devices"] else: newJObject()
+      if devices.kind != JObject: return (0, "Invalid instance devices")
+      for _, device in devices:
+        if device.kind != JObject: return (0, "Invalid instance device")
+        if device.getOrDefault("type").getStr() != "proxy": continue
+        let listen = device.getOrDefault("listen").getStr()
+        if not listen.startsWith("tcp:"): continue
+        for part in listen.split(':')[^1].split(','):
+          let limits = part.split('-')
+          let first = parseInt(limits[0])
+          let last = if limits.len == 2: parseInt(limits[1]) else: first
+          if limits.len > 2 or first < 1 or last > 65535 or last < first:
+            return (0, "Invalid proxy port metadata")
+          for port in first .. last: blocked.add(port)
+    return (reservePort(name, blocked), "")
+  except CatchableError:
+    return (0, "Failed to reserve ports; inspect allocations and Incus metadata before retrying")
 
 # --- Post-create script helper ---
 
 proc runPostCreateScript(containerName, name, scriptPath: string): bool =
   ## Push and run post-create script as dev user
   ## Returns true on success, false on failure (logs warnings)
-  let pushExit = execCmd(fmt"incus file push {scriptPath} {containerName}/tmp/ocdev-post-create.sh")
+  let pushExit = execCmd("incus file push " & quoteShell(scriptPath) & " " & quoteShell(containerName & "/tmp/ocdev-post-create.sh"))
   if pushExit != 0:
     warn("Failed to push post-create script")
     return false
@@ -431,8 +463,8 @@ proc checkPrerequisites(initialize = true): int =
   # Read-only commands do not initialize local state.
   if initialize:
     createDir(OcdevDir)
-    if not fileExists(PortsFile):
-      writeFile(PortsFile, "")
+    # The allocator creates the port file under its lock; eager initialization
+    # here could truncate another process's first reservation.
   
   result = ord(ecSuccess)
 
@@ -515,10 +547,13 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
       return ord(ecError)
 
     # Allocate port
-    let (port, portErr) = allocatePortSafe()
+    let (port, portErr) = allocatePortSafe(name)
     if portErr.len > 0:
       error(portErr)
       return ord(ecError)
+    var keepPort = false
+    defer:
+      if not keepPort and confirmedAbsent(name): removePort(name)
 
     var cleanup = initCleanup(containerName)
 
@@ -528,7 +563,7 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
     if exitCode != 0:
       let cloneFailure = if cloneSource.kind == cskSnapshot: "Failed to clone from snapshot" else: "Failed to clone from container"
       error(cloneFailure)
-      cleanup.run()
+      # A failed copy does not prove ownership of an instance with this name.
       return ord(ecError)
 
     # Reconfigure proxy devices with new ports
@@ -546,16 +581,13 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
       cleanup.run()
       return ord(ecError)
 
-    # Run custom post-create script if provided
+    # A failed user hook keeps the container and its reserved ports for debugging.
+    cleanup.cancel()
+    keepPort = true
     if postCreate.len > 0:
       info("Running post-create script...")
-      discard runPostCreateScript(containerName, name, postCreate)
-
-    # Success - save port allocation
-    withLockVoid(exclusive = true) do ():
-      savePortAllocation(name, port)
-
-    cleanup.cancel()
+      if not runPostCreateScript(containerName, name, postCreate):
+        return ord(ecError)
 
     let serviceBase = getServicePortBase(port)
     let serviceEnd = serviceBase + ServicePortsCount - 1
@@ -571,10 +603,13 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
   ensureProfile()
   
   # Allocate port
-  let (port, portErr) = allocatePortSafe()
+  let (port, portErr) = allocatePortSafe(name)
   if portErr.len > 0:
     error(portErr)
     return ord(ecError)
+  var keepPort = false
+  defer:
+    if not keepPort and confirmedAbsent(name): removePort(name)
   
   var cleanup = initCleanup(containerName)
   
@@ -585,7 +620,6 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
                          " --profile default --profile " & ProfileName)
   if exitCode != 0:
     error("Failed to launch container")
-    cleanup.run()
     return ord(ecError)
   
   # Add proxy devices (SSH + service ports)
@@ -602,11 +636,12 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
   let provisionScript = getProvisionScript(hostUid)
   
   # Write script to temp file, push to container, execute
-  let tmpFile = getTempDir() / "ocdev-provision.sh"
-  writeFile(tmpFile, provisionScript)
+  let (provisionFile, tmpFile) = createTempFile("ocdev-provision-", ".sh")
+  provisionFile.write(provisionScript)
+  provisionFile.close()
   defer: removeFile(tmpFile)
   
-  let pushExit = execCmd(fmt"incus file push {tmpFile} {containerName}/tmp/provision.sh")
+  let pushExit = execCmd("incus file push " & quoteShell(tmpFile) & " " & quoteShell(containerName & "/tmp/provision.sh"))
   if pushExit != 0:
     error("Failed to push provisioning script")
     cleanup.run()
@@ -622,11 +657,12 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
   
   # Run default post-install script as dev user
   info("Installing dev tools (uv, nvm, opencode)...")
-  let postInstallTmp = getTempDir() / "ocdev-postinstall.sh"
-  writeFile(postInstallTmp, PostInstallScript)
+  let (postFile, postInstallTmp) = createTempFile("ocdev-postinstall-", ".sh")
+  postFile.write(PostInstallScript)
+  postFile.close()
   defer: removeFile(postInstallTmp)
   
-  let postInstallPush = execCmd(fmt"incus file push {postInstallTmp} {containerName}/tmp/postinstall.sh")
+  let postInstallPush = execCmd("incus file push " & quoteShell(postInstallTmp) & " " & quoteShell(containerName & "/tmp/postinstall.sh"))
   if postInstallPush != 0:
     warn("Failed to push post-install script, skipping dev tools...")
   else:
@@ -644,16 +680,13 @@ proc cmdCreate*(name: string, postCreate = "", fromSnapshot = "", `from` = "", f
     cleanup.run()
     return ord(ecError)
   
-  # Run custom post-create script if provided
+  # A failed user hook keeps the container and its reserved ports for debugging.
+  cleanup.cancel()
+  keepPort = true
   if postCreate.len > 0:
     info("Running post-create script...")
-    discard runPostCreateScript(containerName, name, postCreate)
-  
-  # Success - save port allocation
-  withLockVoid(exclusive = true) do ():
-    savePortAllocation(name, port)
-  
-  cleanup.cancel()
+    if not runPostCreateScript(containerName, name, postCreate):
+      return ord(ecError)
   
   let serviceEnd = serviceBase + ServicePortsCount - 1
   success(fmt"Container '{name}' created (SSH: {port}, Services: {serviceBase}-{serviceEnd})")
@@ -1005,7 +1038,7 @@ proc cmdUnbind*(name: string, port: int): int =
   success(fmt"Unbound port {port}")
   result = ord(ecSuccess)
 
-proc cmdRebind*(name: string, port: string): int =
+proc rebindPort(name, port, pinnedOwner: string; discoverOwner: bool): int =
   ## Rebind a port to a different container, unbinding from the current owner first
   ##
   ## If the port is already bound to another container, it will be unbound first.
@@ -1043,7 +1076,9 @@ proc cmdRebind*(name: string, port: string): int =
     return ord(ecSuccess)
 
   # Find which container currently has this port bound
-  let currentOwner = findPortBinding(hostPort)
+  # Guarded callers supply the owner they locked and revalidated. Do not
+  # rediscover another owner here and mutate it without holding its lock.
+  let currentOwner = if discoverOwner: findPortBinding(hostPort) else: pinnedOwner
 
   if currentOwner.len > 0:
     # Unbind from current owner
@@ -1076,6 +1111,17 @@ proc cmdRebind*(name: string, port: string): int =
       success(fmt"Bound host:{hostPort} -> container:{containerPort} to '{name}'")
 
   result = ord(ecSuccess)
+
+proc cmdRebind*(name: string, port: string): int =
+  ## Move a host-port binding to another container.
+  rebindPort(name, port, "", discoverOwner = true)
+
+proc cmdRebindFrom*(name, port, owner: string): int =
+  ## Internal adapter: caller holds endpoint locks and has revalidated owner.
+  if owner.len > 0 and
+      (not owner.startsWith(ContainerPrefix) or not validateName(owner[ContainerPrefix.len .. ^1]).valid):
+    return ord(ecError)
+  rebindPort(name, port, owner, discoverOwner = false)
 
 proc cmdExport*(name: string, output = ""): int =
   ## Export a container as a portable tarball
@@ -1187,10 +1233,13 @@ proc cmdImport*(name: string, file: string): int =
   ensureProfile()
 
   # Allocate port
-  let (port, portErr) = allocatePortSafe()
+  let (port, portErr) = allocatePortSafe(name)
   if portErr.len > 0:
     error(portErr)
     return ord(ecError)
+  var keepPort = false
+  defer:
+    if not keepPort and confirmedAbsent(name): removePort(name)
 
   # Import container from backup tarball
   info(fmt"Importing container from {file}...")
@@ -1237,11 +1286,9 @@ proc cmdImport*(name: string, file: string): int =
     cleanup.run()
     return ord(ecError)
 
-  # Save port allocation
-  withLockVoid(exclusive = true) do ():
-    savePortAllocation(name, port)
-
+  # Port allocation was reserved atomically before importing.
   cleanup.cancel()
+  keepPort = true
 
   let serviceBase = getServicePortBase(port)
   let serviceEnd = serviceBase + ServicePortsCount - 1

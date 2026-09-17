@@ -1,0 +1,11 @@
+version: "0.5"
+shell:
+  shell_command: sh
+  shell_argument: -c
+processes:
+  web:
+    command: 'set -a; . ./.env; set +a; exec .venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000'
+    working_dir: /home/dev/workspace/app
+    availability:
+      restart: on_failure
+      backoff_seconds: 5

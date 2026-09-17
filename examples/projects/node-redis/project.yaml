@@ -1,0 +1,20 @@
+schemaVersion: 1
+id: node-redis-example
+name: Local Node and Redis example
+recipePath: ../../recipes/node-redis.yaml
+seedFiles:
+  - id: application-env
+    source: .env.example
+    destination: /home/dev/workspace/app/.env
+    mode: "0600"
+    required: true
+  - id: docker-compose
+    source: compose.yaml
+    destination: /home/dev/workspace/app/.ocdev/compose.yaml
+    mode: "0644"
+    required: true
+  - id: process-compose
+    source: process-compose.yaml
+    destination: /home/dev/workspace/app/.ocdev/process-compose.yaml
+    mode: "0644"
+    required: true
