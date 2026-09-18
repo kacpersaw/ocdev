@@ -2,7 +2,7 @@
 import std/[json, os, posix, strutils]
 
 const
-  Version* = "0.1.2"
+  Version* {.strdefine.} = "dev"
   ContainerPrefix* = "ocdev-"
   ProfileName* = "ocdev"
   BaseImage* = "images:ubuntu/25.10"
