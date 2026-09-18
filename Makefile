@@ -1,25 +1,28 @@
-.PHONY: all clean test test-list-json test-create-config test-recipes test-live dev-setup FORCE
+.PHONY: all clean test test-version test-list-json test-create-config test-recipes test-live dev-setup FORCE
 
 NIMFLAGS = -d:release --opt:size
 NIM_TEST_FLAGS ?= --hints:off
+# Guard against source archives picking up an enclosing repository's version.
+OCDEV_VERSION ?= $(shell test -e .git && git describe --tags --always --dirty 2>/dev/null || printf '%s' dev)
+export OCDEV_VERSION
 TEST_SRC = cmd/ocdev/tests
 RECIPE_TEST_BINS = bin/test_recipes bin/test_cli_recipes bin/test_recipe_engine \
 	bin/fake_incus_cli bin/fake_incus_engine bin/recipe_engine_harness
-TEST_BINS = $(RECIPE_TEST_BINS) bin/test_all bin/test_list_json bin/fake_incus_list \
+TEST_BINS = $(RECIPE_TEST_BINS) bin/test_version bin/test_all bin/test_list_json bin/fake_incus_list \
 	bin/test_process_support bin/process_probe bin/test_create_config bin/fake_incus_create_config
 # The recipe CLI includes a maintained YAML parser; keep its release budget explicit.
 MAX_BINARY_BYTES ?= 2097152
 
 all: bin/ocdev
 
-bin/ocdev: cmd/ocdev/src/ocdev.nim cmd/ocdev/src/*.nim
-	cd cmd/ocdev && nim c $(NIMFLAGS) -o:../../bin/ocdev src/ocdev.nim
+bin/ocdev: cmd/ocdev/src/ocdev.nim cmd/ocdev/src/*.nim FORCE
+	cd cmd/ocdev && nim c $(NIMFLAGS) "-d:Version=$$OCDEV_VERSION" -o:../../bin/ocdev src/ocdev.nim
 
-bin/ocdev-debug: cmd/ocdev/src/ocdev.nim cmd/ocdev/src/*.nim
-	cd cmd/ocdev && nim c -o:../../bin/ocdev-debug src/ocdev.nim
+bin/ocdev-debug: cmd/ocdev/src/ocdev.nim cmd/ocdev/src/*.nim FORCE
+	cd cmd/ocdev && nim c "-d:Version=$$OCDEV_VERSION" -o:../../bin/ocdev-debug src/ocdev.nim
 
-# Always invoke Nim for tests: its cache tracks transitive Atlas dependencies
-# and compiler configuration that Make's source timestamps alone cannot cover.
+# Always invoke Nim: its cache tracks dependencies and compiler configuration,
+# including version changes from Git state or overrides without source edits.
 FORCE:
 
 # Controllers and fake executables inherit the project-local Atlas nim.cfg.
@@ -39,8 +42,9 @@ bin/process_probe: $(TEST_SRC)/fixtures/process_probe.nim FORCE
 	mkdir -p bin
 	nim c $(NIM_TEST_FLAGS) --out:$@ $<
 
-# Default tests use Nim only and never contact a live Incus daemon.
+# Offline tests use Nim, Git and Make; never contact a live Incus daemon.
 test: bin/ocdev $(TEST_BINS)
+	bin/test_version
 	bin/test_all
 	bin/test_process_support "$(abspath bin/process_probe)"
 	bin/test_recipes
@@ -48,6 +52,9 @@ test: bin/ocdev $(TEST_BINS)
 	bin/test_create_config "$(abspath bin/ocdev)" "$(abspath bin/fake_incus_create_config)"
 	bin/test_cli_recipes "$(abspath bin/ocdev)" "$(abspath bin/fake_incus_cli)"
 	bin/test_recipe_engine "$(abspath bin/recipe_engine_harness)" "$(abspath bin/fake_incus_engine)"
+
+test-version: bin/test_version
+	bin/test_version
 
 test-recipes: bin/ocdev $(RECIPE_TEST_BINS)
 	bin/test_recipes

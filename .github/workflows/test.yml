@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: jiro4989/setup-nim-action@v2
         with:
           nim-version: "2.2.x"

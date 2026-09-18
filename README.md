@@ -56,12 +56,31 @@ mkdir -p ~/.local/bin
 ln -sf "$(pwd)/bin/ocdev" ~/.local/bin/ocdev
 ```
 
+### Build version
+
+Release (`make`) and debug (`make bin/ocdev-debug`) builds embed
+`git describe --tags --always --dirty` at compile time: `v0.3.0` at the tag,
+`v0.3.0-3-gabc1234` three commits later, and a `-dirty` suffix for tracked
+local modifications. Without a reachable tag, Git supplies a commit hash;
+untracked files do not mark a build dirty. No Git executable is needed at runtime.
+
+Override the version with `make OCDEV_VERSION=v0.3.0-custom` (or export
+`OCDEV_VERSION` in the environment). Source archives and builds without usable
+Git metadata fall back to `dev`. Direct Nim builds also default to `dev` unless
+passed `-d:Version=...`. Nimble's package version remains ordinary release semver.
+
+Make invokes Nim on every build, using its compiler cache, so commits, tag
+changes, dirty/clean transitions and version overrides cannot leave stale
+version output. A build after a new commit normally reports tag distance, not
+exactly `v0.3.0`; existing release tags and published assets are not changed.
+
 ## Testing
 
 After `make dev-setup`, run `make test` on Linux. The unit and integration tests
 are written in Nim and use compiled fake Incus executables; they require neither
 Python nor a live Incus daemon. Test binaries are built into `bin/` using the
-same project-local Atlas dependencies as ocdev.
+same project-local Atlas dependencies as ocdev. Version regression tests also
+require Git and GNU Make; run them separately with `make test-version`.
 
 Use `make test-list-json` for listing contracts, `make test-create-config` for
 create defaults and `--fresh`, or `make test-recipes` for recipe

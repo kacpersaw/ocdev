@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Nim
         uses: jiro4989/setup-nim-action@v2
@@ -25,13 +27,15 @@ jobs:
         run: make dev-setup
 
       - name: Build release binary
-        run: make
+        run: |
+          make
+          test "$(bin/ocdev --version)" = "$GITHUB_REF_NAME"
 
       - name: Strip binary
         run: strip bin/ocdev
 
       - name: Size check
-        run: make size-check
+        run: make --old-file=bin/ocdev size-check
 
       - name: Package artifact
         run: |
@@ -56,6 +60,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
